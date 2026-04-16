@@ -2,7 +2,6 @@
 
 import { useRef, useState } from 'react';
 import type { Item } from '@/lib/bradley-terry';
-import { detectMetaKeys } from '@/lib/bradley-terry';
 import type { Database } from 'sql.js';
 import type { queryTable as QueryTableFn } from '@/lib/sqlite';
 import { saveMeta } from '@/lib/db';
@@ -40,46 +39,82 @@ const SAMPLE_DATASET = [
   { name: 'Waifu #10025', imageUrl: 'https://www.thiswaifudoesnotexist.net/example-10025.jpg', model: 'StyleGAN 2', epoch: 'early' },
 ];
 
+const RESERVED_KEYS = new Set(['id', 'ID', 'Id', 'rowid', 'ROWID', '_id']);
+const IMAGE_FIELD_HINTS = ['imageUrl', 'imageurl', 'image_url', 'img', 'src', 'cover', 'thumbnail', 'photo', 'picture', 'avatar', 'image'];
+const NONE_IMAGE = '__none__';
+
 function detectIdColumn(rows: Record<string, unknown>[]): string {
   if (!rows.length) return 'id';
   const keys = Object.keys(rows[0]);
   for (const candidate of ['id', 'ID', 'Id', 'rowid', 'ROWID', '_id']) {
     if (keys.includes(candidate)) return candidate;
   }
-  return keys[0]; // fallback to first column
+  return keys[0];
 }
 
-function parseEntries(raw: Record<string, unknown>[]): { items: Item[]; metaKeys: string[] } {
-  const metaKeys = detectMetaKeys(raw);
-  const items: Item[] = raw.map((e, i) => {
+function getAllKeys(rows: Record<string, unknown>[]): string[] {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    for (const key of Object.keys(row)) {
+      keys.add(key);
+    }
+  }
+  return [...keys].sort();
+}
+
+function guessImageField(keys: string[]): string {
+  for (const hint of IMAGE_FIELD_HINTS) {
+    const match = keys.find((k) => k.toLowerCase() === hint.toLowerCase());
+    if (match) return match;
+  }
+  return NONE_IMAGE;
+}
+
+function guessNameField(keys: string[]): string {
+  for (const hint of ['name', 'title', 'label', 'Name', 'Title']) {
+    if (keys.includes(hint)) return hint;
+  }
+  return '';
+}
+
+function buildItems(
+  raw: Record<string, unknown>[],
+  imageField: string | null,
+  displayFields: string[]
+): Item[] {
+  const nameField = guessNameField(Object.keys(raw[0] || {}));
+  return raw.map((e, i) => {
     const meta: Record<string, string | number | boolean> = {};
-    for (const key of metaKeys) {
+    for (const key of displayFields) {
       const val = e[key];
       if (val !== undefined && val !== null && (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean')) {
         meta[key] = val;
       }
     }
+
+    const idVal = e.id ?? e.ID ?? e.Id ?? e.rowid ?? e.ROWID ?? e._id;
+
     return {
-      id: (e.id as string) || `item-${i}-${Date.now()}`,
-      name: (e.name as string) || `Item ${i + 1}`,
-      imageUrl: (e.imageUrl as string) || undefined,
+      id: idVal != null ? String(idVal) : `item-${i}-${Date.now()}`,
+      name: nameField ? String(e[nameField] ?? `Item ${i + 1}`) : `Item ${i + 1}`,
+      imageUrl: imageField && imageField !== NONE_IMAGE ? (String(e[imageField] ?? '') || undefined) : undefined,
       rating: 0,
       comparisons: 0,
       wins: 0,
       meta,
     };
   });
-  return { items, metaKeys };
 }
 
 type Step =
   | { type: 'upload' }
   | { type: 'table'; db: Database; tables: string[]; rowCounts: Record<string, number>; buffer: ArrayBuffer }
-  | { type: 'fields'; items: Item[]; metaKeys: string[] };
+  | { type: 'fields'; raw: Record<string, unknown>[]; allKeys: string[] };
 
 export default function UploadBox({ onLoad }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>({ type: 'upload' });
+  const [imageField, setImageField] = useState<string>(NONE_IMAGE);
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set());
   const queryTableRef = useRef<typeof QueryTableFn | null>(null);
 
@@ -88,13 +123,20 @@ export default function UploadBox({ onLoad }: Props) {
       alert('Dataset must contain at least 2 items.');
       return;
     }
-    const { items, metaKeys } = parseEntries(raw);
-    if (metaKeys.length === 0) {
+    const allKeys = getAllKeys(raw);
+    const nonReserved = allKeys.filter((k) => !RESERVED_KEYS.has(k));
+
+    if (nonReserved.length === 0) {
+      // No fields at all beyond id — just load directly
+      const items = buildItems(raw, null, []);
       onLoad(items, []);
-    } else {
-      setStep({ type: 'fields', items, metaKeys });
-      setSelectedFields(new Set());
+      return;
     }
+
+    const guessedImg = guessImageField(nonReserved);
+    setImageField(guessedImg);
+    setSelectedFields(new Set());
+    setStep({ type: 'fields', raw, allKeys: nonReserved });
   };
 
   const handleFile = async (file: File) => {
@@ -120,10 +162,8 @@ export default function UploadBox({ onLoad }: Props) {
       if (tables.length === 1) {
         const rows = queryTable(resolvedDb, tables[0]);
         resolvedDb.close();
-        // Store original DB for re-export
         await saveMeta('sqlite-buffer', new Uint8Array(buffer));
         await saveMeta('sqlite-table', tables[0]);
-        // Detect the id column (first column named 'id', 'rowid', or first column)
         const idCol = detectIdColumn(rows);
         await saveMeta('sqlite-id-column', idCol);
         processEntries(rows);
@@ -155,7 +195,6 @@ export default function UploadBox({ onLoad }: Props) {
     }
     const rows = qt(step.db, table);
     step.db.close();
-    // Store original DB for re-export with paired_rating column
     await saveMeta('sqlite-buffer', new Uint8Array(step.buffer));
     await saveMeta('sqlite-table', table);
     const idCol = detectIdColumn(rows);
@@ -187,7 +226,10 @@ export default function UploadBox({ onLoad }: Props) {
 
   const confirmFields = () => {
     if (step.type !== 'fields') return;
-    onLoad(step.items, [...selectedFields]);
+    const imgField = imageField !== NONE_IMAGE ? imageField : null;
+    const display = [...selectedFields].filter((k) => k !== imageField);
+    const items = buildItems(step.raw, imgField, display);
+    onLoad(items, display);
     setStep({ type: 'upload' });
   };
 
@@ -199,6 +241,11 @@ export default function UploadBox({ onLoad }: Props) {
       return next;
     });
   };
+
+  // Non-image, non-name fields available for display checkboxes
+  const displayableKeys = step.type === 'fields'
+    ? step.allKeys.filter((k) => k !== imageField && !guessNameField(step.allKeys).includes(k))
+    : [];
 
   // Step: Table selection (SQLite)
   if (step.type === 'table') {
@@ -229,34 +276,76 @@ export default function UploadBox({ onLoad }: Props) {
     );
   }
 
-  // Step: Field selection
+  // Step: Field selection (image field + display fields)
   if (step.type === 'fields') {
+    const sampleRow = step.raw[0] || {};
     return (
       <div className="upload-screen">
         <div className="field-selector">
-          <h3>Select fields to display during comparison</h3>
-          <p className="field-hint">
-            Your dataset has {step.items.length} items with these extra fields.
-            Check any you want shown alongside images.
-          </p>
-          <div className="field-list">
-            {step.metaKeys.map((key) => (
-              <label key={key} className="field-option">
+          <h3>Configure fields</h3>
+
+          <div className="field-section">
+            <p className="field-section-label">Image field (one only)</p>
+            <div className="field-list">
+              <label className="field-option">
                 <input
-                  type="checkbox"
-                  checked={selectedFields.has(key)}
-                  onChange={() => toggleField(key)}
+                  type="radio"
+                  name="image-field"
+                  checked={imageField === NONE_IMAGE}
+                  onChange={() => setImageField(NONE_IMAGE)}
                 />
-                <span>{key}</span>
-                <span className="field-sample">
-                  e.g. {String(step.items[0]?.meta[key] ?? '—')}
-                </span>
+                <span className="meta-label">None</span>
+                <span className="field-sample">no images</span>
               </label>
-            ))}
+              {step.allKeys.map((key) => (
+                <label key={key} className="field-option">
+                  <input
+                    type="radio"
+                    name="image-field"
+                    checked={imageField === key}
+                    onChange={() => {
+                      setImageField(key);
+                      // Remove from display fields if it was checked
+                      setSelectedFields((prev) => {
+                        const next = new Set(prev);
+                        next.delete(key);
+                        return next;
+                      });
+                    }}
+                  />
+                  <span>{key}</span>
+                  <span className="field-sample">
+                    {String(sampleRow[key] ?? '').slice(0, 50)}
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
+
+          {displayableKeys.length > 0 && (
+            <div className="field-section">
+              <p className="field-section-label">Display fields (shown during comparison)</p>
+              <div className="field-list">
+                {displayableKeys.map((key) => (
+                  <label key={key} className="field-option">
+                    <input
+                      type="checkbox"
+                      checked={selectedFields.has(key)}
+                      onChange={() => toggleField(key)}
+                    />
+                    <span>{key}</span>
+                    <span className="field-sample">
+                      e.g. {String(sampleRow[key] ?? '—').slice(0, 50)}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="field-actions">
             <button onClick={confirmFields}>
-              Start Rating{selectedFields.size > 0 ? ` (showing ${selectedFields.size} fields)` : ''}
+              Start Rating ({step.raw.length} items)
             </button>
             <button onClick={() => setStep({ type: 'upload' })}>Cancel</button>
           </div>

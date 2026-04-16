@@ -415,12 +415,25 @@ img {
   margin: 0 0 1em;
 }
 
+.field-section {
+  margin: 1em 0 0;
+}
+
+.field-section-label {
+  font-size: 0.85em;
+  font-weight: bold;
+  text-align: left;
+  margin: 0 0 0.35em;
+}
+
 .field-list {
   text-align: left;
   border: 1px solid var(--upload-border);
   border-radius: 4px;
   padding: 0.5em;
   background: var(--upload-bg);
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .field-option {
