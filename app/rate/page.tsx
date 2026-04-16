@@ -99,7 +99,7 @@ export default function RatePage() {
       idCol as string
     );
 
-    const blob = new Blob([result], { type: 'application/x-sqlite3' });
+    const blob = new Blob([result as BlobPart], { type: 'application/x-sqlite3' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
