@@ -47,7 +47,7 @@ export default function Home() {
         </h1>
         <p className="subtitle">
           (Model &amp; site by{' '}
-          <a href="https://krisyotam.com/kbt" target="_blank" rel="noopener">
+          <a href="https://krisyotam.com" target="_blank" rel="noopener">
             Kris Yotam
           </a>
           .)
