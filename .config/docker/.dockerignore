@@ -1,0 +1,30 @@
+# Node / build artifacts
+node_modules
+.next
+dist
+build
+
+# Git / editor / OS files
+.git
+.gitignore
+.vscode
+.idea
+.DS_Store
+*.log
+
+# Local env / secrets
+.env
+.env.local
+.env.*.local
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+tsconfig.tsbuildinfo
+
+# Caches
+.cache
+.parcel-cache
+.pnpm-store
+
+# Generated / CI / platform files
+.vercel
