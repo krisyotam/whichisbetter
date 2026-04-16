@@ -88,8 +88,12 @@ export default function RatePage() {
     }
 
     const uint8 = bufferRaw as Uint8Array;
+    const sliced = (uint8.buffer as ArrayBuffer).slice(
+      uint8.byteOffset,
+      uint8.byteOffset + uint8.byteLength
+    );
     const result = await exportDbWithRatings(
-      uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength),
+      sliced,
       table as string,
       ratings,
       idCol as string
