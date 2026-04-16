@@ -1,8 +1,8 @@
-import initSqlJs, { type Database } from 'sql.js';
+import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 
-let sqlPromise: Promise<typeof import('sql.js')> | null = null;
+let sqlPromise: Promise<SqlJsStatic> | null = null;
 
-function getSql() {
+function getSql(): Promise<SqlJsStatic> {
   if (!sqlPromise) {
     sqlPromise = initSqlJs({
       locateFile: () => '/sql-wasm.wasm',
